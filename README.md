@@ -165,7 +165,3 @@ The application is prepared to work with knowledge sources connected to the Micr
 - Expand and version the IT knowledge base with retrieval evaluation.
 - Add monitoring, feedback collection, and response-quality metrics.
 - Deploy the Streamlit application and Foundry configuration through a documented release process.
-
-## Team / Academic Project Note
-
-This repository is an academic and portfolio-oriented project demonstrating a practical IT support workflow with Streamlit and Microsoft Foundry. Team members can extend the Foundry agent configuration, knowledge sources, evaluation tests, and future ticketing integrations without exposing credentials in source control.
