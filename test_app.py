@@ -39,6 +39,5 @@ class AppSmokeTest(unittest.TestCase):
             self.assertEqual(len(reopened_store.list_conversations()), 2)
             self.assertEqual(reopened_store.load_messages(second)[0]["content"], "VPN is disconnected")
 
-
 if __name__ == "__main__":
     unittest.main()
