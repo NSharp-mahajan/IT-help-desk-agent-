@@ -93,6 +93,23 @@ class TelemetryStore:
                 "CREATE INDEX IF NOT EXISTS idx_support_feedback_created_at "
                 "ON support_feedback(created_at)"
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tickets (
+                    id TEXT PRIMARY KEY,
+                    conversation_id TEXT,
+                    category TEXT,
+                    description TEXT,
+                    priority TEXT,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tickets_created_at "
+                "ON tickets(created_at)"
+            )
 
     @staticmethod
     def _timestamp() -> str:
@@ -315,3 +332,187 @@ class TelemetryStore:
             None if not total else summary["resolved_requests"] / total * 100
         )
         return summary
+
+    CATEGORY_LABELS = {
+        "network": "Network / Wi-Fi",
+        "vpn": "VPN",
+        "account": "Password / Account",
+        "general": "General / Other",
+        "printer": "Printer",
+        "email": "Email",
+        "software": "Software Installation",
+    }
+
+    def conversation_count(self, start_at: str | None = None) -> int:
+        """Count distinct support conversations active or created in the selected period."""
+        with self._connection() as connection:
+            has_conv = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'conversations'"
+            ).fetchone() is not None
+
+            if has_conv:
+                if start_at is None:
+                    query = """
+                        SELECT COUNT(DISTINCT id) AS count FROM (
+                            SELECT conversation_id AS id FROM support_request_events
+                            UNION
+                            SELECT id FROM conversations
+                        )
+                    """
+                    row = connection.execute(query).fetchone()
+                else:
+                    query = """
+                        SELECT COUNT(DISTINCT id) AS count FROM (
+                            SELECT conversation_id AS id FROM support_request_events WHERE requested_at >= ?
+                            UNION
+                            SELECT id FROM conversations WHERE created_at >= ?
+                        )
+                    """
+                    row = connection.execute(query, (start_at, start_at)).fetchone()
+                return row["count"] if row else 0
+
+            where_clause, parameters = self._filter_clause(start_at)
+            row = connection.execute(
+                f"SELECT COUNT(DISTINCT conversation_id) AS count FROM support_request_events{where_clause}",
+                parameters,
+            ).fetchone()
+            return row["count"] if row else 0
+
+    def ticket_count(self, start_at: str | None = None) -> int:
+        """Return total count of support tickets in the selected period."""
+        with self._connection() as connection:
+            has_tickets = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tickets'"
+            ).fetchone() is not None
+            if not has_tickets:
+                return 0
+            if start_at is None:
+                row = connection.execute("SELECT COUNT(*) AS count FROM tickets").fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT COUNT(*) AS count FROM tickets WHERE created_at >= ?", (start_at,)
+                ).fetchone()
+            return row["count"] if row else 0
+
+    def ticket_summary(self, start_at: str | None = None) -> dict[str, int]:
+        """Return ticket counts grouped by status in the selected period."""
+        result = {"total_tickets": 0, "open_tickets": 0, "resolved_tickets": 0, "escalated_tickets": 0}
+        with self._connection() as connection:
+            has_tickets = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tickets'"
+            ).fetchone() is not None
+            if not has_tickets:
+                return result
+            where_clause = "" if start_at is None else " WHERE created_at >= ?"
+            params = () if start_at is None else (start_at,)
+            row = connection.execute(
+                f"""
+                SELECT COUNT(*) AS total_tickets,
+                    COALESCE(SUM(status = 'open'), 0) AS open_tickets,
+                    COALESCE(SUM(status = 'resolved'), 0) AS resolved_tickets,
+                    COALESCE(SUM(status = 'escalated'), 0) AS escalated_tickets
+                FROM tickets{where_clause}
+                """,
+                params,
+            ).fetchone()
+            if row:
+                result = dict(row)
+        return result
+
+    def resolution_vs_escalation(self, start_at: str | None = None) -> dict[str, int | float | None]:
+        """Compare resolved versus escalated support cases."""
+        feedback = self.feedback_summary(start_at)
+        resolved = feedback["resolved_requests"]
+        escalated = feedback["not_resolved_requests"]
+
+        tickets = self.ticket_summary(start_at)
+        resolved += tickets.get("resolved_tickets", 0)
+        escalated += tickets.get("escalated_tickets", 0)
+
+        total = resolved + escalated
+        res_rate = None if total == 0 else round(resolved / total * 100, 1)
+        esc_rate = None if total == 0 else round(escalated / total * 100, 1)
+
+        return {
+            "resolved_count": resolved,
+            "escalated_count": escalated,
+            "total_cases": total,
+            "resolution_rate": res_rate,
+            "escalation_rate": esc_rate,
+        }
+
+    def category_distribution(self, start_at: str | None = None) -> list[dict[str, int | str]]:
+        """Return distribution of issue categories across recorded requests and tickets."""
+        where_clause, parameters = self._filter_clause(start_at)
+        event_filter = " WHERE category IS NOT NULL"
+        if where_clause:
+            event_filter += " AND requested_at >= ?"
+
+        with self._connection() as connection:
+            has_tickets = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tickets'"
+            ).fetchone() is not None
+
+            if has_tickets:
+                ticket_filter = " WHERE category IS NOT NULL"
+                ticket_params = ()
+                if start_at is not None:
+                    ticket_filter += " AND created_at >= ?"
+                    ticket_params = (start_at,)
+                query = f"""
+                    SELECT category, COUNT(*) AS requests
+                    FROM (
+                        SELECT category FROM support_request_events{event_filter}
+                        UNION ALL
+                        SELECT category FROM tickets{ticket_filter}
+                    )
+                    GROUP BY category ORDER BY requests DESC, category ASC
+                """
+                rows = connection.execute(query, parameters + ticket_params).fetchall()
+            else:
+                rows = connection.execute(
+                    f"""
+                    SELECT category, COUNT(*) AS requests
+                    FROM support_request_events{event_filter}
+                    GROUP BY category ORDER BY requests DESC, category ASC
+                    """,
+                    parameters,
+                ).fetchall()
+
+        result = []
+        for row in rows:
+            cat = row["category"]
+            label = self.CATEGORY_LABELS.get(cat, cat.replace("_", " ").title())
+            result.append({"category": cat, "label": label, "requests": row["requests"]})
+        return result
+
+    def most_common_category(self, start_at: str | None = None) -> dict[str, str | int | float] | None:
+        """Return the most common IT issue category, or None if no category data exists."""
+        dist = self.category_distribution(start_at)
+        if not dist:
+            return None
+        total = sum(item["requests"] for item in dist)
+        top = dist[0]
+        pct = round(top["requests"] / total * 100, 1) if total > 0 else 0.0
+        return {
+            "category": top["category"],
+            "label": top["label"],
+            "requests": top["requests"],
+            "percentage": pct,
+        }
+
+    def usage_trends(self, start_at: str | None = None) -> list[dict[str, int | str]]:
+        """Return daily usage trends over time including requests and conversations."""
+        where_clause, parameters = self._filter_clause(start_at)
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT substr(requested_at, 1, 10) AS day,
+                    COUNT(*) AS requests,
+                    COUNT(DISTINCT conversation_id) AS conversations
+                FROM support_request_events{where_clause}
+                GROUP BY day ORDER BY day ASC
+                """,
+                parameters,
+            ).fetchall()
+        return [dict(row) for row in rows]

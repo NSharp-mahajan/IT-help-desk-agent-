@@ -66,11 +66,17 @@ flowchart TB
 
 ## Support Analytics and Privacy
 
-The in-app **Support analytics** view reads actual request events and user feedback from the existing local `chat_history.db` SQLite database. It measures support-request volume, successful agent requests, fallback requests, agent success rate, average response latency, P95 response latency, aggregated failure stage, sanitized exception type, response latency, and explicit resolution feedback.
+The in-app **Support analytics** view provides an IT support analytics dashboard that reads actual request events, conversations, user feedback, and tickets from the local `chat_history.db` SQLite database.
 
-After an assistant response, users can explicitly select whether their issue was resolved or they still need help and may optionally provide a short feedback comment. Feedback, including an optional comment, is stored once against that exact support-request event, not only against its conversation. Comments are voluntary user-provided content and are not used in aggregate resolution-rate calculations. A user-confirmed resolution rate uses only requests with feedback. An agent success means Microsoft Foundry returned a response; it does not mean the user's issue was resolved. Telemetry does not store prompts, responses, access tokens, credentials, or other secrets.
+The dashboard displays:
+- **Support Overview**: Number of distinct support conversations, total support requests, support ticket counts, and agent success rate.
+- **Resolved vs. Escalated Issues**: Direct comparison of user-confirmed issue resolutions against unresolved issues requiring escalation, including resolution and escalation rates with side-by-side visualization.
+- **Issue Category Distribution**: Distribution of IT issue categories, total categorized issues, category breakdowns, and identification of the most common IT issue category.
+- **Usage Trends Over Time**: Daily timeline of support requests and active conversations across selectable time ranges (Last 24 hours, Last 7 days, Last 30 days, All time).
+- **System Performance & Observability**: Average response latency, nearest-rank P95 response latency, successful vs. fallback requests, and sanitized failure breakdowns (error stage, error type, and latency).
 
-Category analytics cover only local fallback troubleshooting traffic. The categories (`network`, `vpn`, `account`, and `general`) are selected by the application's existing deterministic fallback branches. Successful Foundry requests remain uncategorized because Foundry does not return a reliable structured category to this application; the fallback category chart is not a distribution of all support requests. Escalation is intentionally not reported because there is no explicit escalation event or ticket-routing integration.
+### Privacy Guarantee
+All analytics metrics use structured, aggregated data only. User prompts, full message transcripts, free-form feedback comments, access tokens, and credentials are never stored in or exposed by the analytics dashboard.
 
 ## Supported IT Categories
 
@@ -158,15 +164,13 @@ The application is prepared to work with knowledge sources connected to the Micr
 - “How can I install the approved PDF reader?”
 
 ## Current Limitations
-
-- Automatic ticket creation is **not implemented**.
+ 
+- Automatic ticket creation from the chat interface is **not implemented** (future scope; tickets table in SQLite is supported for analytics tracking).
 - MCP integration is **not implemented**.
-- There is no ticket history or ticketing integration.
-- Category and escalation analytics are not recorded because Foundry does not return those as reliable structured signals to this application. Resolution analytics are available only from explicit user feedback.
 - There is no authentication UI in the application.
 - Cloud deployment is not included in this repository.
 - The local application does not implement its own File Search / RAG pipeline or knowledge-base management.
-- Escalation currently means guidance in the agent response; it does not create or route a support ticket.
+- Escalation guidance is provided in agent responses; ticket creation requires future backend integration.
 
 ## Future Scope
 

@@ -48,12 +48,12 @@ def start_new_conversation():
 
 
 def show_analytics():
-    """Render analytics from request events recorded by this application."""
+    """Render analytics from request events, conversations, feedback, and tickets."""
     st.markdown(
         """
         <div class="main-view-header">
-          <div class="view-heading">IT Support Analytics</div>
-          <div class="status-indicator">Actual application request events</div>
+          <div class="view-heading">IT Support Analytics Dashboard</div>
+          <div class="status-indicator">Aggregated support metrics & observability</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -67,69 +67,111 @@ def show_analytics():
     selected_range = st.selectbox("Time range", tuple(ranges), index=2)
     duration = ranges[selected_range]
     start_at = None if duration is None else (datetime.now(UTC) - duration).isoformat()
+
     summary = TELEMETRY.summary(start_at)
-    total = summary["total_requests"]
+    total_requests = summary["total_requests"]
+    total_conversations = TELEMETRY.conversation_count(start_at)
+    ticket_count = TELEMETRY.ticket_count(start_at)
+    success_rate = summary["agent_success_rate"]
+    success_rate_display = "—" if success_rate is None else f"{success_rate:.1f}%"
+
+    st.markdown("### Support Overview")
+    kpi_cols = st.columns(4)
+    kpi_cols[0].metric("Support conversations", total_conversations)
+    kpi_cols[1].metric("Support requests", total_requests)
+    kpi_cols[2].metric("Support tickets", ticket_count)
+    kpi_cols[3].metric("Agent success rate", success_rate_display)
+
+    st.markdown("---")
+
+    # Resolved vs Escalated issues
+    st.subheader("Resolved vs Escalated Issues")
+    comp = TELEMETRY.resolution_vs_escalation(start_at)
+    res_rate_display = "—" if comp["resolution_rate"] is None else f"{comp['resolution_rate']:.1f}%"
+    esc_rate_display = "—" if comp["escalation_rate"] is None else f"{comp['escalation_rate']:.1f}%"
+
+    res_cols = st.columns(4)
+    res_cols[0].metric("Resolved issues", comp["resolved_count"])
+    res_cols[1].metric("Escalated issues", comp["escalated_count"])
+    res_cols[2].metric("Resolution rate", res_rate_display)
+    res_cols[3].metric("Escalation rate", esc_rate_display)
+
+    if comp["total_cases"] > 0:
+        comparison_data = [
+            {"Status": "Resolved", "Cases": comp["resolved_count"]},
+            {"Status": "Escalated", "Cases": comp["escalated_count"]},
+        ]
+        st.bar_chart(comparison_data, x="Status", y="Cases")
+        st.caption("Compares user-confirmed issue resolutions against unresolved issues requiring escalation.")
+    else:
+        st.info("No resolution or escalation outcomes recorded for this time period.")
+
+    st.markdown("---")
+
+    # Issue Category Distribution & Most Common IT Categories
+    st.subheader("Issue Categories")
+    categories = TELEMETRY.category_distribution(start_at)
+    top_category = TELEMETRY.most_common_category(start_at)
+
+    cat_cols = st.columns(2)
+    with cat_cols[0]:
+        if top_category:
+            top_desc = f"{top_category['label']} ({top_category['requests']} requests, {top_category['percentage']}%)"
+        else:
+            top_desc = "None recorded"
+        st.metric("Most common issue category", top_desc)
+
+    with cat_cols[1]:
+        categorized_count = sum(c["requests"] for c in categories) if categories else 0
+        st.metric("Categorized issues", categorized_count)
+
+    if categories:
+        cat_chart_data = [{"Category": row["label"], "Requests": row["requests"]} for row in categories]
+        st.bar_chart(cat_chart_data, x="Category", y="Requests")
+        st.dataframe(
+            [{"Category": row["label"], "Requests": row["requests"]} for row in categories],
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("No categorized issue requests recorded in this period.")
+
+    st.markdown("---")
+
+    # Basic usage trends over time
+    st.subheader("Usage Trends Over Time")
+    trends = TELEMETRY.usage_trends(start_at)
+    if trends:
+        st.bar_chart(trends, x="day", y="requests")
+        st.caption("Daily request activity over the selected time range.")
+    else:
+        st.info("No usage activity recorded for this period.")
+
+    st.markdown("---")
+
+    # Performance & Observability
+    st.subheader("System Performance & Reliability")
     average_latency = summary["average_latency_ms"]
     latency_display = "—" if average_latency is None else f"{average_latency / 1000:.2f} s"
     p95_latency = summary["p95_latency_ms"]
     p95_display = "—" if p95_latency is None else f"{p95_latency / 1000:.2f} s"
-    success_rate = summary["agent_success_rate"]
-    success_rate_display = "—" if success_rate is None else f"{success_rate:.1f}%"
-    metrics = st.columns(3)
-    metrics[0].metric("Support requests", total)
-    metrics[1].metric("Successful agent requests", summary["successful_requests"])
-    metrics[2].metric("Fallback requests", summary["failed_requests"])
-    metrics[0].metric("Agent success rate", success_rate_display)
-    metrics[1].metric("Average response latency", latency_display)
-    metrics[2].metric("P95 response latency", p95_display)
 
-    feedback = TELEMETRY.feedback_summary(start_at)
-    feedback_rate = feedback["user_confirmed_resolution_rate"]
-    feedback_rate_display = "—" if feedback_rate is None else f"{feedback_rate:.1f}%"
-    st.subheader("User feedback / resolution")
-    feedback_metrics = st.columns(4)
-    feedback_metrics[0].metric("Feedback responses", feedback["feedback_responses"])
-    feedback_metrics[1].metric("User-confirmed resolved", feedback["resolved_requests"])
-    feedback_metrics[2].metric("Still need help", feedback["not_resolved_requests"])
-    feedback_metrics[3].metric("User-confirmed resolution rate", feedback_rate_display)
-    st.caption("Resolution rate uses only requests that received explicit user feedback.")
-
-    if not total:
-        st.info("Analytics will appear after the first support request is completed.")
-        return
-
-    volume = TELEMETRY.volume_by_day(start_at)
-    st.subheader("Request volume")
-    st.bar_chart(volume, x="day", y="requests")
+    perf_cols = st.columns(3)
+    perf_cols[0].metric("Successful agent requests", summary["successful_requests"])
+    perf_cols[1].metric("Fallback requests", summary["failed_requests"])
+    perf_cols[2].metric("Average response latency", latency_display)
 
     failures = TELEMETRY.failure_breakdown(start_at)
-    st.subheader("Failure observability")
     if failures:
+        st.write("**Failure observability**")
         st.dataframe(failures, use_container_width=True, hide_index=True)
-        st.caption("Failure details include stage, sanitized exception type, and average response latency. Prompts, responses, and secrets are not logged.")
+        st.caption("Failure details include stage, sanitized exception type, and average response latency.")
     else:
-        st.success("No Foundry failures have been recorded.")
-
-    categories = TELEMETRY.fallback_category_distribution(start_at)
-    st.subheader("Fallback requests by category")
-    if categories:
-        category_labels = {
-            "network": "Network / Wi-Fi",
-            "vpn": "VPN",
-            "account": "Password / Account",
-            "general": "General / Unclassified",
-        }
-        category_chart_data = [
-            {"category": category_labels[row["category"]], "requests": row["requests"]}
-            for row in categories
-        ]
-        st.bar_chart(category_chart_data, x="category", y="requests")
-    else:
-        st.info("No categorized fallback requests were recorded in this period.")
+        st.success("No Foundry service failures recorded.")
 
     st.caption(
-        "Category and escalation metrics are unavailable because this app does not receive reliable "
-        "structured signals for them from Foundry. Resolution is shown only when explicitly confirmed by a user."
+        "Privacy guarantee: Analytics dashboard aggregates application metrics only. "
+        "Prompts, user messages, free-form feedback text, and credentials are never stored in or exposed by analytics."
     )
 
 

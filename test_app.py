@@ -38,6 +38,10 @@ class AppSmokeTest(unittest.TestCase):
         self.assertNotIn("create_agent", source)
         self.assertIn("TelemetryStore", source)
         self.assertIn("record_request(", source)
+        self.assertIn("IT Support Analytics Dashboard", source)
+        self.assertIn("Resolved vs Escalated Issues", source)
+        self.assertIn("Issue Categories", source)
+        self.assertIn("Usage Trends Over Time", source)
 
     def test_conversations_survive_reopening_and_preserve_message_order(self):
         with TemporaryDirectory() as directory:
@@ -404,6 +408,187 @@ class AppSmokeTest(unittest.TestCase):
                         "SELECT category FROM support_request_events WHERE id = 'request-1'"
                     ).fetchone()["category"]
                 )
+
+    def test_analytics_conversation_count(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "history.db"
+            conv_store = ConversationStore(database)
+            telemetry = TelemetryStore(database)
+
+            c1 = conv_store.create_conversation("First issue")
+            c2 = conv_store.create_conversation("Second issue")
+
+            with telemetry._connection() as connection:
+                connection.execute("UPDATE conversations SET created_at = '2026-09-20T10:00:00+00:00' WHERE id = ?", (c1,))
+                connection.execute("UPDATE conversations SET created_at = '2026-09-21T10:00:00+00:00' WHERE id = ?", (c2,))
+
+            telemetry.record_request(c1, "2026-09-20T10:00:00+00:00", 150, "agent_success")
+            telemetry.record_request(c2, "2026-09-21T10:00:00+00:00", 200, "agent_success")
+
+            self.assertEqual(telemetry.conversation_count(), 2)
+            self.assertEqual(telemetry.conversation_count("2026-09-21T00:00:00+00:00"), 1)
+
+    def test_analytics_conversation_count_without_conversations_table(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "history.db"
+            telemetry = TelemetryStore(database)
+            telemetry.record_request("c1", "2026-09-20T10:00:00+00:00", 150, "agent_success")
+            telemetry.record_request("c1", "2026-09-20T11:00:00+00:00", 150, "agent_success")
+            telemetry.record_request("c2", "2026-09-21T10:00:00+00:00", 200, "agent_success")
+
+            self.assertEqual(telemetry.conversation_count(), 2)
+            self.assertEqual(telemetry.conversation_count("2026-09-21T00:00:00+00:00"), 1)
+
+    def test_analytics_ticket_count_and_summary(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "history.db"
+            telemetry = TelemetryStore(database)
+
+            self.assertEqual(telemetry.ticket_count(), 0)
+            self.assertEqual(
+                telemetry.ticket_summary(),
+                {"total_tickets": 0, "open_tickets": 0, "resolved_tickets": 0, "escalated_tickets": 0},
+            )
+
+            with telemetry._connection() as connection:
+                connection.execute(
+                    "INSERT INTO tickets (id, conversation_id, category, description, priority, status, created_at) "
+                    "VALUES ('t1', 'c1', 'network', 'No wifi', 'high', 'open', '2026-09-20T10:00:00+00:00')"
+                )
+                connection.execute(
+                    "INSERT INTO tickets (id, conversation_id, category, description, priority, status, created_at) "
+                    "VALUES ('t2', 'c1', 'vpn', 'VPN dropped', 'medium', 'escalated', '2026-09-21T11:00:00+00:00')"
+                )
+                connection.execute(
+                    "INSERT INTO tickets (id, conversation_id, category, description, priority, status, created_at) "
+                    "VALUES ('t3', 'c2', 'account', 'Password lock', 'low', 'resolved', '2026-09-21T12:00:00+00:00')"
+                )
+
+            self.assertEqual(telemetry.ticket_count(), 3)
+            self.assertEqual(telemetry.ticket_count("2026-09-21T00:00:00+00:00"), 2)
+
+            summary = telemetry.ticket_summary()
+            self.assertEqual(summary["total_tickets"], 3)
+            self.assertEqual(summary["open_tickets"], 1)
+            self.assertEqual(summary["escalated_tickets"], 1)
+            self.assertEqual(summary["resolved_tickets"], 1)
+
+    def test_analytics_resolved_vs_escalated_comparison(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "history.db"
+            telemetry = TelemetryStore(database)
+
+            req1 = telemetry.record_request("c1", "2026-09-20T10:00:00+00:00", 100, "agent_success")
+            req2 = telemetry.record_request("c1", "2026-09-21T10:00:00+00:00", 100, "agent_success")
+            telemetry.record_feedback(req1, "resolved")
+            telemetry.record_feedback(req2, "not_resolved")
+
+            comp = telemetry.resolution_vs_escalation()
+            self.assertEqual(comp["resolved_count"], 1)
+            self.assertEqual(comp["escalated_count"], 1)
+            self.assertEqual(comp["total_cases"], 2)
+            self.assertEqual(comp["resolution_rate"], 50.0)
+            self.assertEqual(comp["escalation_rate"], 50.0)
+
+            with telemetry._connection() as connection:
+                connection.execute(
+                    "INSERT INTO tickets (id, conversation_id, category, description, priority, status, created_at) "
+                    "VALUES ('t1', 'c1', 'network', 'Escalated issue', 'high', 'escalated', '2026-09-21T11:00:00+00:00')"
+                )
+
+            comp2 = telemetry.resolution_vs_escalation()
+            self.assertEqual(comp2["resolved_count"], 1)
+            self.assertEqual(comp2["escalated_count"], 2)
+            self.assertEqual(comp2["total_cases"], 3)
+            self.assertAlmostEqual(comp2["resolution_rate"], 33.3, places=1)
+            self.assertAlmostEqual(comp2["escalation_rate"], 66.7, places=1)
+
+    def test_analytics_category_distribution_and_most_common(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "history.db"
+            telemetry = TelemetryStore(database)
+
+            telemetry.record_request("c1", "2026-09-20T10:00:00+00:00", 100, "fallback", category="network")
+            telemetry.record_request("c1", "2026-09-20T11:00:00+00:00", 100, "fallback", category="network")
+            telemetry.record_request("c1", "2026-09-20T12:00:00+00:00", 100, "fallback", category="vpn")
+
+            dist = telemetry.category_distribution()
+            self.assertEqual(len(dist), 2)
+            self.assertEqual(dist[0]["category"], "network")
+            self.assertEqual(dist[0]["requests"], 2)
+            self.assertEqual(dist[0]["label"], "Network / Wi-Fi")
+            self.assertEqual(dist[1]["category"], "vpn")
+            self.assertEqual(dist[1]["requests"], 1)
+
+            top = telemetry.most_common_category()
+            self.assertIsNotNone(top)
+            self.assertEqual(top["category"], "network")
+            self.assertEqual(top["label"], "Network / Wi-Fi")
+            self.assertEqual(top["requests"], 2)
+            self.assertAlmostEqual(top["percentage"], 66.7, places=1)
+
+    def test_analytics_usage_trends_over_time(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "history.db"
+            telemetry = TelemetryStore(database)
+
+            telemetry.record_request("c1", "2026-09-20T10:00:00+00:00", 100, "agent_success")
+            telemetry.record_request("c1", "2026-09-20T11:00:00+00:00", 100, "agent_success")
+            telemetry.record_request("c2", "2026-09-21T09:00:00+00:00", 100, "agent_success")
+
+            trends = telemetry.usage_trends()
+            self.assertEqual(len(trends), 2)
+            self.assertEqual(trends[0]["day"], "2026-09-20")
+            self.assertEqual(trends[0]["requests"], 2)
+            self.assertEqual(trends[0]["conversations"], 1)
+            self.assertEqual(trends[1]["day"], "2026-09-21")
+            self.assertEqual(trends[1]["requests"], 1)
+            self.assertEqual(trends[1]["conversations"], 1)
+
+    def test_analytics_usable_with_empty_data(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "history.db"
+            telemetry = TelemetryStore(database)
+
+            self.assertEqual(telemetry.conversation_count(), 0)
+            self.assertEqual(telemetry.ticket_count(), 0)
+            self.assertEqual(
+                telemetry.ticket_summary(),
+                {"total_tickets": 0, "open_tickets": 0, "resolved_tickets": 0, "escalated_tickets": 0},
+            )
+            self.assertEqual(
+                telemetry.resolution_vs_escalation(),
+                {
+                    "resolved_count": 0,
+                    "escalated_count": 0,
+                    "total_cases": 0,
+                    "resolution_rate": None,
+                    "escalation_rate": None,
+                },
+            )
+            self.assertEqual(telemetry.category_distribution(), [])
+            self.assertIsNone(telemetry.most_common_category())
+            self.assertEqual(telemetry.usage_trends(), [])
+
+    def test_analytics_privacy_guarantee(self):
+        with TemporaryDirectory() as directory:
+            database = Path(directory) / "history.db"
+            telemetry = TelemetryStore(database)
+
+            req = telemetry.record_request("c1", "2026-09-20T10:00:00+00:00", 100, "agent_success")
+            secret_comment = "SECRET_PASSWORD_12345"
+            telemetry.record_feedback(req, "resolved", secret_comment)
+
+            dist = telemetry.category_distribution()
+            trends = telemetry.usage_trends()
+            comp = telemetry.resolution_vs_escalation()
+            summary = telemetry.summary()
+            vol = telemetry.volume_by_day()
+            failures = telemetry.failure_breakdown()
+
+            for payload in (dist, trends, comp, summary, vol, failures):
+                payload_str = str(payload)
+                self.assertNotIn(secret_comment, payload_str)
 
 if __name__ == "__main__":
     unittest.main()
