@@ -62,6 +62,15 @@ flowchart TB
 - Microsoft Foundry agent integration using the configured project endpoint
 - Azure authentication through `DefaultAzureCredential`
 - User-visible error handling when the helpdesk agent cannot be reached
+- SQLite-backed analytics for real request outcomes, latency, volume, and sanitized failure types
+
+## Support Analytics and Privacy
+
+The in-app **Support analytics** view reads actual request events and user feedback from the existing local `chat_history.db` SQLite database. It measures support-request volume, successful agent requests, fallback requests, agent success rate, average response latency, P95 response latency, aggregated failure stage, sanitized exception type, response latency, and explicit resolution feedback.
+
+After an assistant response, users can explicitly select whether their issue was resolved or they still need help and may optionally provide a short feedback comment. Feedback, including an optional comment, is stored once against that exact support-request event, not only against its conversation. Comments are voluntary user-provided content and are not used in aggregate resolution-rate calculations. A user-confirmed resolution rate uses only requests with feedback. An agent success means Microsoft Foundry returned a response; it does not mean the user's issue was resolved. Telemetry does not store prompts, responses, access tokens, credentials, or other secrets.
+
+Category analytics cover only local fallback troubleshooting traffic. The categories (`network`, `vpn`, `account`, and `general`) are selected by the application's existing deterministic fallback branches. Successful Foundry requests remain uncategorized because Foundry does not return a reliable structured category to this application; the fallback category chart is not a distribution of all support requests. Escalation is intentionally not reported because there is no explicit escalation event or ticket-routing integration.
 
 ## Supported IT Categories
 
@@ -92,6 +101,7 @@ The application is prepared to work with knowledge sources connected to the Micr
 ```text
 .
 ├── app.py             # Streamlit UI and Foundry agent integration
+├── telemetry_store.py # Request telemetry and analytics queries
 ├── requirements.txt   # Python dependencies
 ├── test_app.py        # Application smoke test
 └── .env               # Local configuration; do not commit secrets
@@ -151,7 +161,8 @@ The application is prepared to work with knowledge sources connected to the Micr
 
 - Automatic ticket creation is **not implemented**.
 - MCP integration is **not implemented**.
-- There is no local database or ticket history.
+- There is no ticket history or ticketing integration.
+- Category and escalation analytics are not recorded because Foundry does not return those as reliable structured signals to this application. Resolution analytics are available only from explicit user feedback.
 - There is no authentication UI in the application.
 - Cloud deployment is not included in this repository.
 - The local application does not implement its own File Search / RAG pipeline or knowledge-base management.

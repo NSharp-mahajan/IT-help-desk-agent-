@@ -1,6 +1,8 @@
 import asyncio
 import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from time import perf_counter
 
 import streamlit as st
 from agent_framework.foundry import FoundryAgent
@@ -8,6 +10,7 @@ from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 
 from history_store import ConversationStore
+from telemetry_store import TelemetryStore
 
 load_dotenv()
 
@@ -16,6 +19,7 @@ AGENT_NAME = "IT-Helpdesk-Agent"
 AGENT_VERSION = os.getenv("FOUNDRY_AGENT_VERSION") or None
 
 STORE = ConversationStore(Path(__file__).with_name("chat_history.db"))
+TELEMETRY = TelemetryStore(Path(__file__).with_name("chat_history.db"))
 
 MAX_CONTEXT_MESSAGES = 12
 MAX_CONTEXT_CHARS = 12000
@@ -39,7 +43,94 @@ def start_new_conversation():
     st.session_state.conversation_id = None
     st.session_state.messages = []
     st.session_state.agent_session = None
+    st.session_state.pending_feedback_request_id = None
     st.session_state.page = "active"
+
+
+def show_analytics():
+    """Render analytics from request events recorded by this application."""
+    st.markdown(
+        """
+        <div class="main-view-header">
+          <div class="view-heading">IT Support Analytics</div>
+          <div class="status-indicator">Actual application request events</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    ranges = {
+        "Last 24 hours": timedelta(hours=24),
+        "Last 7 days": timedelta(days=7),
+        "Last 30 days": timedelta(days=30),
+        "All time": None,
+    }
+    selected_range = st.selectbox("Time range", tuple(ranges), index=2)
+    duration = ranges[selected_range]
+    start_at = None if duration is None else (datetime.now(UTC) - duration).isoformat()
+    summary = TELEMETRY.summary(start_at)
+    total = summary["total_requests"]
+    average_latency = summary["average_latency_ms"]
+    latency_display = "—" if average_latency is None else f"{average_latency / 1000:.2f} s"
+    p95_latency = summary["p95_latency_ms"]
+    p95_display = "—" if p95_latency is None else f"{p95_latency / 1000:.2f} s"
+    success_rate = summary["agent_success_rate"]
+    success_rate_display = "—" if success_rate is None else f"{success_rate:.1f}%"
+    metrics = st.columns(3)
+    metrics[0].metric("Support requests", total)
+    metrics[1].metric("Successful agent requests", summary["successful_requests"])
+    metrics[2].metric("Fallback requests", summary["failed_requests"])
+    metrics[0].metric("Agent success rate", success_rate_display)
+    metrics[1].metric("Average response latency", latency_display)
+    metrics[2].metric("P95 response latency", p95_display)
+
+    feedback = TELEMETRY.feedback_summary(start_at)
+    feedback_rate = feedback["user_confirmed_resolution_rate"]
+    feedback_rate_display = "—" if feedback_rate is None else f"{feedback_rate:.1f}%"
+    st.subheader("User feedback / resolution")
+    feedback_metrics = st.columns(4)
+    feedback_metrics[0].metric("Feedback responses", feedback["feedback_responses"])
+    feedback_metrics[1].metric("User-confirmed resolved", feedback["resolved_requests"])
+    feedback_metrics[2].metric("Still need help", feedback["not_resolved_requests"])
+    feedback_metrics[3].metric("User-confirmed resolution rate", feedback_rate_display)
+    st.caption("Resolution rate uses only requests that received explicit user feedback.")
+
+    if not total:
+        st.info("Analytics will appear after the first support request is completed.")
+        return
+
+    volume = TELEMETRY.volume_by_day(start_at)
+    st.subheader("Request volume")
+    st.bar_chart(volume, x="day", y="requests")
+
+    failures = TELEMETRY.failure_breakdown(start_at)
+    st.subheader("Failure observability")
+    if failures:
+        st.dataframe(failures, use_container_width=True, hide_index=True)
+        st.caption("Failure details include stage, sanitized exception type, and average response latency. Prompts, responses, and secrets are not logged.")
+    else:
+        st.success("No Foundry failures have been recorded.")
+
+    categories = TELEMETRY.fallback_category_distribution(start_at)
+    st.subheader("Fallback requests by category")
+    if categories:
+        category_labels = {
+            "network": "Network / Wi-Fi",
+            "vpn": "VPN",
+            "account": "Password / Account",
+            "general": "General / Unclassified",
+        }
+        category_chart_data = [
+            {"category": category_labels[row["category"]], "requests": row["requests"]}
+            for row in categories
+        ]
+        st.bar_chart(category_chart_data, x="category", y="requests")
+    else:
+        st.info("No categorized fallback requests were recorded in this period.")
+
+    st.caption(
+        "Category and escalation metrics are unavailable because this app does not receive reliable "
+        "structured signals for them from Foundry. Resolution is shown only when explicitly confirmed by a user."
+    )
 
 
 def load_conversation(conversation_id):
@@ -52,6 +143,10 @@ def load_conversation(conversation_id):
     st.session_state.conversation_id = conversation_id
     st.session_state.messages = messages
     st.session_state.agent_session = None
+    try:
+        st.session_state.pending_feedback_request_id = TELEMETRY.latest_request_id(conversation_id)
+    except Exception:
+        st.session_state.pending_feedback_request_id = None
     st.session_state.page = "active"
 
 
@@ -60,6 +155,7 @@ def ensure_session_state():
         "conversation_id": None,
         "messages": [],
         "agent_session": None,
+        "pending_feedback_request_id": None,
         "page": "active",
         "theme": "dark",
     }
@@ -67,6 +163,55 @@ def ensure_session_state():
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+
+def show_resolution_feedback():
+    """Offer explicit resolution feedback for the latest exact support request."""
+    request_id = st.session_state.pending_feedback_request_id
+    if request_id is None:
+        return
+
+    try:
+        feedback = TELEMETRY.feedback_for_request(request_id)
+    except Exception:
+        st.caption("Feedback is temporarily unavailable. Your support chat is unaffected.")
+        return
+    st.markdown("**Was your issue resolved?**")
+    if feedback is not None:
+        confirmation = (
+            "Thanks for confirming that your issue was resolved."
+            if feedback["resolution_status"] == "resolved"
+            else "Thanks for letting us know you still need help."
+        )
+        st.success(confirmation)
+        return
+
+    feedback_text = st.text_area(
+        "Optional feedback (optional)",
+        key=f"feedback-comment-{request_id}",
+        max_chars=TelemetryStore.MAX_FEEDBACK_TEXT_LENGTH,
+        placeholder="Add a short comment if you would like to share more context.",
+        height=80,
+    )
+    resolved_column, unresolved_column = st.columns(2)
+    selected_status = None
+    with resolved_column:
+        if st.button("Yes, resolved", key=f"feedback-resolved-{request_id}"):
+            selected_status = "resolved"
+    with unresolved_column:
+        if st.button("Still need help", key=f"feedback-unresolved-{request_id}"):
+            selected_status = "not_resolved"
+
+    if selected_status is None:
+        return
+    try:
+        TELEMETRY.record_feedback(request_id, selected_status, feedback_text)
+    except ValueError:
+        st.info("Feedback was already recorded for this support request.")
+    except Exception:
+        st.warning("Feedback could not be saved. Your support chat is unaffected; please try again.")
+    else:
+        st.success("Thanks for your feedback.")
 
 
 def prompt_with_saved_context(messages, prompt):
@@ -108,6 +253,7 @@ def local_troubleshooting_response(prompt):
     request = prompt.lower()
 
     if any(x in request for x in ("internet", "wi-fi", "wifi", "network")):
+        category = "network"
         steps = [
             "Check that airplane mode is off and reconnect to the Wi-Fi network.",
             "Check whether other devices are also offline.",
@@ -115,6 +261,7 @@ def local_troubleshooting_response(prompt):
             "Record the exact error and network name if the issue continues.",
         ]
     elif "vpn" in request:
+        category = "vpn"
         steps = [
             "Confirm that your normal internet connection works.",
             "Disconnect and reconnect the VPN once.",
@@ -122,6 +269,7 @@ def local_troubleshooting_response(prompt):
             "Record the exact VPN error and contact IT if it continues.",
         ]
     elif any(x in request for x in ("password", "login", "sign in", "account")):
+        category = "account"
         steps = [
             "Use the approved password-reset process and never share your password.",
             "Check Caps Lock and confirm the correct work account.",
@@ -129,6 +277,7 @@ def local_troubleshooting_response(prompt):
             "Contact IT if the account remains inaccessible.",
         ]
     else:
+        category = "general"
         steps = [
             "Restart the affected application or device.",
             "Check whether the issue affects other applications or devices.",
@@ -136,11 +285,12 @@ def local_troubleshooting_response(prompt):
             "Contact IT with those details if the issue continues.",
         ]
 
-    return (
+    response = (
         "Microsoft Foundry is currently unavailable. "
         "Here is first-line troubleshooting guidance:\n\n"
         + "\n".join(f"{i}. {step}" for i, step in enumerate(steps, 1))
     )
+    return response, category
 
 
 st.set_page_config(
@@ -597,6 +747,10 @@ with st.sidebar:
         st.session_state.page = "history"
         st.rerun()
 
+    if st.button("📊  Support analytics", use_container_width=True):
+        st.session_state.page = "analytics"
+        st.rerun()
+
     theme_toggle_label = "☀️  Light mode" if is_dark else "🌙  Dark mode"
     if st.button(theme_toggle_label, use_container_width=True):
         st.session_state.theme = "light" if is_dark else "dark"
@@ -626,6 +780,10 @@ if st.session_state.page == "history":
                 load_conversation(conversation["id"])
                 st.rerun()
 
+    st.stop()
+
+if st.session_state.page == "analytics":
+    show_analytics()
     st.stop()
 
 
@@ -691,6 +849,8 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
+show_resolution_feedback()
+
 user_input = st.chat_input("Message IT Helpdesk...")
 active_prompt = selected_quick_prompt or user_input
 
@@ -711,6 +871,12 @@ if active_prompt:
         st.markdown(active_prompt)
 
     with st.chat_message("assistant"):
+        requested_at = datetime.now(UTC).isoformat()
+        request_started = perf_counter()
+        outcome = "agent_success"
+        error_stage = None
+        error_type = None
+        category = None
         try:
             agent_prompt = active_prompt
 
@@ -731,12 +897,32 @@ if active_prompt:
             )
             st.session_state.agent_session = session
 
-        except Exception:
+        except Exception as error:
+            outcome = "fallback"
+            error_stage = "foundry_agent_run"
+            error_type = type(error).__name__
             st.warning(
                 "Microsoft Foundry could not be reached. "
                 "Using local troubleshooting guidance."
             )
-            answer = local_troubleshooting_response(active_prompt)
+            answer, category = local_troubleshooting_response(active_prompt)
+
+        request_id = None
+        try:
+            request_id = TELEMETRY.record_request(
+                conversation_id=conversation_id,
+                requested_at=requested_at,
+                latency_ms=round((perf_counter() - request_started) * 1000),
+                outcome=outcome,
+                error_stage=error_stage,
+                error_type=error_type,
+                category=category,
+            )
+        except Exception:
+            # Analytics must never interrupt IT support or alter its fallback behavior.
+            pass
+        else:
+            st.session_state.pending_feedback_request_id = request_id
 
         st.markdown(answer)
 
