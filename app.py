@@ -11,6 +11,19 @@ from dotenv import load_dotenv
 
 from history_store import ConversationStore
 from telemetry_store import TelemetryStore
+from firebase_auth import (
+    FirebaseConfig,
+    FirebaseAuthClient,
+    FirebaseAuthError,
+    validate_email,
+    validate_password,
+)
+from firestore_service import (
+    FirestoreClient,
+    FirestoreError,
+    FirestorePermissionError,
+    categorize_prompt,
+)
 
 load_dotenv()
 
@@ -200,11 +213,275 @@ def ensure_session_state():
         "pending_feedback_request_id": None,
         "page": "active",
         "theme": "dark",
+        "auth_user": None,
+        "auth_view": "login",
     }
 
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+
+def logout():
+    """Thoroughly purge session state, cache, and authentication credentials."""
+    st.session_state.auth_user = None
+    st.session_state.conversation_id = None
+    st.session_state.messages = []
+    st.session_state.agent_session = None
+    st.session_state.pending_feedback_request_id = None
+    st.session_state.page = "active"
+    st.session_state.auth_view = "login"
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    st.rerun()
+
+
+def show_profile_view():
+    """Render the User Profile Dashboard with Firestore activity history and data isolation."""
+    user = st.session_state.auth_user
+    if not user:
+        show_auth_view()
+        st.stop()
+
+    uid = user.get("uid") or user.get("localId") or "Unknown"
+    email = user.get("email") or "Unknown"
+
+    st.markdown(
+        """
+        <div class="main-view-header">
+          <div class="view-heading">User Profile & IT Support Dashboard</div>
+          <div class="status-indicator">Authenticated Identity & History</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # 1. USER PROFILE SECTION
+    st.subheader("Account Identity")
+    prof_col1, prof_col2 = st.columns(2)
+    with prof_col1:
+        st.markdown(f"**Email:** `{email}`")
+        st.markdown(f"**Firebase UID:** `{uid}`")
+    with prof_col2:
+        st.markdown("**Account Status:** Active")
+        st.markdown("**Authentication Authority:** Firebase Authentication")
+
+    st.markdown("---")
+
+    # 2. HELP DESK ACTIVITY SECTION
+    st.subheader("My Helpdesk Activity")
+
+    activities = []
+    fetch_error = None
+    config = FirebaseConfig.load()
+
+    if config and config.project_id:
+        try:
+            client = FirestoreClient(
+                project_id=config.project_id,
+                id_token=user.get("id_token"),
+            )
+            # Enforce user data isolation: caller_uid must match uid
+            activities = client.get_user_activity(uid=uid, caller_uid=uid)
+        except FirestorePermissionError:
+            fetch_error = "Access denied: Firestore security rules prevented loading history."
+        except FirestoreError as err:
+            fetch_error = f"Database notice: {err.message}"
+        except Exception:
+            fetch_error = "Could not connect to Cloud Firestore at this time."
+    else:
+        fetch_error = "Cloud Firestore project is not configured in `.streamlit/secrets.toml`."
+
+    if fetch_error:
+        st.caption(f"ℹ️ {fetch_error}")
+
+    total_questions = len(activities)
+    distinct_conversations = len(set(a["conversation_id"] for a in activities if a.get("conversation_id")))
+    latest_cat = activities[0].get("category", "—") if activities else "—"
+
+    kpi1, kpi2, kpi3 = st.columns(3)
+    kpi1.metric("Total Questions", total_questions)
+    kpi2.metric("Total Conversations", distinct_conversations)
+    kpi3.metric("Latest Issue Category", latest_cat)
+
+    st.markdown("#### Recent Questions")
+
+    if not activities:
+        st.info("No helpdesk activity yet.")
+    else:
+        for idx, act in enumerate(activities[:20], 1):
+            q_text = act.get("question", "Untitled question")
+            category = act.get("category", "General")
+            ts = act.get("timestamp", "")
+            conv_id = act.get("conversation_id", "")
+            date_display = ts[:16].replace("T", " ") if ts else "Recent"
+
+            card_col, action_col = st.columns([4, 1])
+            with card_col:
+                st.markdown(
+                    f"""
+                    <div style="padding: 10px 14px; margin-bottom: 8px; background: var(--surface2); border: 1px solid var(--border2); border-radius: 8px;">
+                      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+                        <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--accent);">{category}</span>
+                        <span style="font-size: 11px; color: var(--dim);">{date_display}</span>
+                      </div>
+                      <div style="font-size: 14px; font-weight: 500; color: var(--text);">{q_text}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            with action_col:
+                if conv_id:
+                    if st.button("Open Chat", key=f"prof_open_{act.get('id', idx)}", use_container_width=True):
+                        load_conversation(conv_id)
+                        st.session_state.page = "active"
+                        st.rerun()
+
+    st.markdown("---")
+
+    # 3. SIGN OUT BUTTON
+    st.subheader("Session Management")
+    st.caption("Sign out to end your authenticated session on this browser.")
+    if st.button("Sign out from IT Helpdesk", type="primary", key="profile_logout_btn"):
+        logout()
+
+
+def show_auth_view():
+    """Render the authentication screen (Login / Signup) and stop script execution."""
+    config = FirebaseConfig.load()
+
+    st.markdown(
+        """
+        <div class="auth-container">
+            <div class="auth-brand-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                    <path d="M2 17l10 5 10-5"></path>
+                    <path d="M2 12l10 5 10-5"></path>
+                </svg>
+            </div>
+            <div class="auth-title">IT Helpdesk Console</div>
+            <div class="auth-subtitle">AI Diagnostics & Support Portal</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not config:
+        st.warning(
+            "Firebase Authentication is not configured. "
+            "Please configure your Firebase credentials in `.streamlit/secrets.toml` or set environment variables."
+        )
+        with st.expander("Configuration Instructions", expanded=False):
+            st.markdown(
+                """
+                Create or edit `.streamlit/secrets.toml`:
+                ```toml
+                [firebase]
+                api_key = "AIzaSy..."
+                auth_domain = "your-project.firebaseapp.com"
+                project_id = "your-project"
+                storage_bucket = "your-project.appspot.com"
+                messaging_sender_id = "..."
+                app_id = "..."
+                ```
+                Or set the `FIREBASE_API_KEY` environment variable.
+                """
+            )
+        st.stop()
+
+    client = FirebaseAuthClient(config)
+    is_login = st.session_state.auth_view == "login"
+
+    _, center_col, _ = st.columns([1, 2, 1])
+
+    with center_col:
+        st.markdown(
+            f"""
+            <div class="auth-mode-heading">
+                <h3>{"Sign In" if is_login else "Create Account"}</h3>
+                <p>{"Enter your credentials to access the IT Helpdesk" if is_login else "Sign up with email and password to access the portal"}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if is_login:
+            with st.form("login_form", clear_on_submit=False):
+                email = st.text_input("Email address", placeholder="name@company.com", key="login_email").strip()
+                show_pw = st.checkbox("Show password", key="login_show_pw")
+                password = st.text_input(
+                    "Password",
+                    type="default" if show_pw else "password",
+                    placeholder="Enter your password",
+                    key="login_password",
+                )
+                submitted = st.form_submit_button("Sign In", use_container_width=True, type="primary")
+
+                if submitted:
+                    valid_email, email_err = validate_email(email)
+                    if not valid_email:
+                        st.error(email_err)
+                    elif not password:
+                        st.error("Password is required.")
+                    else:
+                        with st.spinner("Signing in..."):
+                            try:
+                                user = client.sign_in(email, password)
+                                st.session_state.auth_user = user
+                                st.rerun()
+                            except FirebaseAuthError as err:
+                                st.error(err.message)
+
+            st.markdown('<div class="auth-switch-prompt">Don\'t have an account?</div>', unsafe_allow_html=True)
+            if st.button("Create an account", use_container_width=True, key="btn_switch_signup"):
+                st.session_state.auth_view = "signup"
+                st.rerun()
+
+        else:
+            with st.form("signup_form", clear_on_submit=False):
+                email = st.text_input("Email address", placeholder="name@company.com", key="signup_email").strip()
+                show_pw = st.checkbox("Show password", key="signup_show_pw")
+                password = st.text_input(
+                    "Password",
+                    type="default" if show_pw else "password",
+                    placeholder="At least 6 characters",
+                    key="signup_password",
+                )
+                confirm_password = st.text_input(
+                    "Confirm Password",
+                    type="default" if show_pw else "password",
+                    placeholder="Re-enter your password",
+                    key="signup_confirm_password",
+                )
+                submitted = st.form_submit_button("Create Account", use_container_width=True, type="primary")
+
+                if submitted:
+                    valid_email, email_err = validate_email(email)
+                    valid_pw, pw_err = validate_password(password)
+                    if not valid_email:
+                        st.error(email_err)
+                    elif not valid_pw:
+                        st.error(pw_err)
+                    elif password != confirm_password:
+                        st.error("Passwords do not match. Please re-enter your password.")
+                    else:
+                        with st.spinner("Creating account..."):
+                            try:
+                                user = client.sign_up(email, password)
+                                st.session_state.auth_user = user
+                                st.rerun()
+                            except FirebaseAuthError as err:
+                                st.error(err.message)
+
+            st.markdown('<div class="auth-switch-prompt">Already have an account?</div>', unsafe_allow_html=True)
+            if st.button("Sign in instead", use_container_width=True, key="btn_switch_login"):
+                st.session_state.auth_view = "login"
+                st.rerun()
+
+    st.stop()
 
 
 def show_resolution_feedback():
@@ -791,10 +1068,135 @@ html, body, .stApp, [class*="css"] {{
 [data-testid="stChatInput"] button:hover {{
   background-color: var(--accent-hover) !important;
 }}
+
+/* AUTHENTICATION & USER PROFILE STYLES */
+.auth-container {{
+  max-width: 480px;
+  margin: 20px auto;
+  text-align: center;
+}}
+
+.auth-brand-icon {{
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}}
+
+.auth-title {{
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+  letter-spacing: -0.02em;
+}}
+
+.auth-subtitle {{
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 24px;
+}}
+
+.auth-mode-heading {{
+  margin-bottom: 18px;
+  text-align: center;
+}}
+
+.auth-mode-heading h3 {{
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}}
+
+.auth-mode-heading p {{
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0;
+}}
+
+.auth-switch-prompt {{
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  margin: 16px 0 8px 0;
+}}
+
+.user-card {{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background-color: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  margin-bottom: 12px;
+}}
+
+.user-badge-icon {{
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: rgba(16, 185, 129, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--accent);
+}}
+
+.user-email-text {{
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}}
+
+[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] {{
+  gap: 8px !important;
+  margin-bottom: 8px !important;
+}}
+
+[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] .stButton > button {{
+  background-color: var(--surface2) !important;
+  border: 1px solid var(--border2) !important;
+  border-radius: 8px !important;
+  color: var(--text) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  padding: 6px 10px !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  justify-content: center !important;
+  text-align: center !important;
+}}
+
+[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] .stButton > button:hover {{
+  background-color: var(--hover) !important;
+  border-color: var(--accent) !important;
+}}
+
+[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] .stButton > button div,
+[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] .stButton > button p,
+[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] .stButton > button span {{
+  text-align: center !important;
+  justify-content: center !important;
+  font-size: 12px !important;
+}}
 </style>
 """,
 unsafe_allow_html=True,
 )
+
+if st.session_state.auth_user is None:
+    show_auth_view()
 
 st.markdown(
     """
@@ -833,8 +1235,34 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
+    user_email = (st.session_state.auth_user or {}).get("email") or "Authenticated User"
+    st.markdown(
+        f"""
+        <div class="user-card">
+          <div class="user-badge-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                <circle cx="12" cy="7" r="4"></circle>
+            </svg>
+          </div>
+          <div class="user-email-text" title="{user_email}">{user_email}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col_signout, col_profile = st.columns(2, gap="small")
+    with col_signout:
+        if st.button("Sign out", use_container_width=True, key="btn_signout"):
+            logout()
+    with col_profile:
+        if st.button("🪪 My Profile", use_container_width=True, key="btn_profile_top"):
+            st.session_state.page = "profile"
+            st.rerun()
+
     if st.button("+  New conversation", use_container_width=True, type="primary"):
         start_new_conversation()
+        st.session_state.page = "active"
         st.rerun()
 
     st.markdown('<div class="sidebar-category">Recent Sessions</div>', unsafe_allow_html=True)
@@ -855,25 +1283,34 @@ with st.sidebar:
                 use_container_width=True,
             ):
                 load_conversation(conversation["id"])
+                st.session_state.page = "active"
                 st.rerun()
     else:
         st.caption("No conversations yet.")
 
     st.markdown('<div class="sidebar-category">Navigation</div>', unsafe_allow_html=True)
 
-    if st.button("Conversation archive", use_container_width=True):
+    if st.button("🏠  Helpdesk", use_container_width=True, key="nav_helpdesk"):
+        st.session_state.page = "active"
+        st.rerun()
+
+    if st.button("Conversation archive", use_container_width=True, key="nav_history"):
         st.session_state.page = "history"
         st.rerun()
 
-    if st.button("Support analytics", use_container_width=True):
+    if st.button("Support analytics", use_container_width=True, key="nav_analytics"):
         st.session_state.page = "analytics"
         st.rerun()
 
     theme_toggle_label = "Switch to light theme" if is_dark else "Switch to dark theme"
-    if st.button(theme_toggle_label, use_container_width=True):
+    if st.button(theme_toggle_label, use_container_width=True, key="nav_theme"):
         st.session_state.theme = "light" if is_dark else "dark"
         st.rerun()
 
+
+if st.session_state.page == "profile":
+    show_profile_view()
+    st.stop()
 
 if st.session_state.page == "history":
     st.markdown(
@@ -984,6 +1421,26 @@ if active_prompt:
         active_prompt,
     )
     st.session_state.messages.append(user_message)
+
+    # Record question in Cloud Firestore under user's isolated collection
+    try:
+        fb_config = FirebaseConfig.load()
+        if fb_config and fb_config.project_id and st.session_state.auth_user:
+            user_uid = st.session_state.auth_user.get("uid") or st.session_state.auth_user.get("localId")
+            fs_client = FirestoreClient(
+                project_id=fb_config.project_id,
+                id_token=st.session_state.auth_user.get("id_token"),
+            )
+            fs_client.record_activity(
+                uid=user_uid,
+                question=active_prompt,
+                category=categorize_prompt(active_prompt),
+                conversation_id=conversation_id,
+                caller_uid=user_uid,
+            )
+    except Exception:
+        # Analytics and Firestore activity recording must never interrupt the user chat
+        pass
 
     with st.chat_message("user", avatar=USER_AVATAR):
         st.markdown(active_prompt)
