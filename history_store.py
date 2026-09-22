@@ -104,3 +104,13 @@ class ConversationStore:
                     "UPDATE conversations SET title = ? WHERE id = ?", (content[:60], conversation_id)
                 )
         return {"role": role, "content": content, "created_at": timestamp}
+
+    def get_recent_user_questions(self, limit: int = 50) -> list[dict[str, str]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT id, conversation_id, content AS question, created_at AS timestamp "
+                "FROM messages WHERE role = 'user' "
+                "ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]

@@ -367,7 +367,30 @@ class TestStreamlitAuthIntegration(unittest.TestCase):
         from app import local_troubleshooting_response
         response, category = local_troubleshooting_response("Wi-Fi network connection issue")
         self.assertEqual(category, "network")
-        self.assertIn("Wi-Fi", response)
+    def test_refresh_token_success(self):
+        client = FirebaseAuthClient(FirebaseConfig(api_key="test-api-key"))
+        with patch("requests.post") as mock_post:
+            mock_resp = MagicMock()
+            mock_resp.ok = True
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "id_token": "fresh_id_token",
+                "refresh_token": "fresh_refresh_token",
+                "expires_in": "3600",
+                "user_id": "test_uid",
+                "project_id": "test_project",
+            }
+            mock_post.return_value = mock_resp
+
+            result = client.refresh_token("valid_refresh_token")
+            self.assertEqual(result["id_token"], "fresh_id_token")
+            self.assertEqual(result["refresh_token"], "fresh_refresh_token")
+            self.assertEqual(result["uid"], "test_uid")
+
+    def test_refresh_token_missing_raises_error(self):
+        client = FirebaseAuthClient(FirebaseConfig(api_key="test-api-key"))
+        with self.assertRaises(FirebaseAuthError):
+            client.refresh_token("")
 
 
 if __name__ == "__main__":

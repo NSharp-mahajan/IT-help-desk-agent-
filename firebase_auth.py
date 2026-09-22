@@ -15,6 +15,7 @@ MIN_PASSWORD_LENGTH = 6
 FIREBASE_SIGNUP_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signUp"
 FIREBASE_SIGNIN_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
 FIREBASE_LOOKUP_URL = "https://identitytoolkit.googleapis.com/v1/accounts:lookup"
+FIREBASE_REFRESH_TOKEN_URL = "https://securetoken.googleapis.com/v1/token"
 
 
 class FirebaseAuthError(Exception):
@@ -199,6 +200,58 @@ class FirebaseAuthClient:
         if not users:
             raise FirebaseAuthError("User profile not found.", "USER_NOT_FOUND")
         return users[0]
+
+    def refresh_token(self, refresh_token: str) -> Dict[str, Any]:
+        """Exchange a refresh token for a fresh Firebase ID token."""
+        if not refresh_token or not str(refresh_token).strip():
+            raise FirebaseAuthError("Refresh token is required.", "MISSING_REFRESH_TOKEN")
+
+        params = {"key": self.config.api_key}
+        payload = {
+            "grant_type": "refresh_token",
+            "refresh_token": str(refresh_token).strip(),
+        }
+
+        try:
+            response = requests.post(
+                FIREBASE_REFRESH_TOKEN_URL,
+                params=params,
+                data=payload,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=self.timeout,
+            )
+        except requests.Timeout:
+            raise FirebaseAuthError(
+                "Authentication service timed out. Please check your connection and try again.",
+                "TIMEOUT",
+            )
+        except requests.RequestException:
+            raise FirebaseAuthError(
+                "Unable to connect to authentication service. Please check your network connection.",
+                "NETWORK_ERROR",
+            )
+
+        try:
+            data = response.json()
+        except ValueError:
+            raise FirebaseAuthError(
+                "Received an invalid response from authentication service.",
+                "INVALID_RESPONSE",
+            )
+
+        if not response.ok or "error" in data:
+            error_data = data.get("error", {})
+            raw_message = error_data.get("message", "TOKEN_EXPIRED")
+            user_message = sanitize_firebase_error(raw_message)
+            raise FirebaseAuthError(user_message, raw_message)
+
+        return {
+            "id_token": data.get("id_token"),
+            "refresh_token": data.get("refresh_token"),
+            "expires_in": data.get("expires_in"),
+            "uid": data.get("user_id"),
+            "project_id": data.get("project_id"),
+        }
 
     def _send_request(self, url: str, params: dict, payload: dict) -> Dict[str, Any]:
         """Internal helper to dispatch requests to Firebase REST API with robust error handling."""

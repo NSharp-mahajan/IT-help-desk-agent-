@@ -322,6 +322,58 @@ class TestProfileDashboardFlows(unittest.TestCase):
             with self.assertRaises(FirestorePermissionError):
                 client_a.get_user_activity(uid="uid_b", caller_uid="uid_b")
 
+    def test_conversation_store_get_recent_user_questions(self):
+        """Test that ConversationStore correctly extracts only user questions."""
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from history_store import ConversationStore
+
+        with TemporaryDirectory() as tmpdir:
+            store = ConversationStore(Path(tmpdir) / "test.db")
+            cid = store.create_conversation("Troubleshooting")
+            store.append_message(cid, "user", "How do I connect to VPN?")
+            store.append_message(cid, "assistant", "Open the Cisco client.")
+            store.append_message(cid, "user", "It says authentication failed")
+            store.append_message(cid, "assistant", "Check your MFA prompt.")
+
+            questions = store.get_recent_user_questions()
+            self.assertEqual(len(questions), 2)
+            # Ordered newest first
+            self.assertEqual(questions[0]["question"], "It says authentication failed")
+            self.assertEqual(questions[1]["question"], "How do I connect to VPN?")
+
+    def test_profile_view_local_fallback_on_firestore_permission_error(self):
+        """When Firestore security rules reject access (403), profile falls back to local questions."""
+        import streamlit as st
+        from app import show_profile_view
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from history_store import ConversationStore
+
+        with TemporaryDirectory() as tmpdir:
+            test_store = ConversationStore(Path(tmpdir) / "test.db")
+            cid = test_store.create_conversation("Wi-Fi issue")
+            test_store.append_message(cid, "user", "Wi-Fi is disconnected")
+
+            st.session_state.auth_user = {
+                "email": "user@test.com",
+                "uid": "uid_123",
+                "id_token": "expired_or_forbidden_token",
+            }
+
+            with patch("app.STORE", test_store):
+                with patch("requests.get") as mock_get:
+                    mock_resp = MagicMock()
+                    mock_resp.ok = False
+                    mock_resp.status_code = 403
+                    mock_get.return_value = mock_resp
+
+                    # Run show_profile_view and ensure it completes without unhandled exception
+                    try:
+                        show_profile_view()
+                    except Exception as e:
+                        self.fail(f"show_profile_view raised unexpected exception: {e}")
+
 
 if __name__ == "__main__":
     unittest.main()

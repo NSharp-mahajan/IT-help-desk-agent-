@@ -275,6 +275,7 @@ def show_profile_view():
 
     activities = []
     fetch_error = None
+    cloud_synced = False
     config = FirebaseConfig.load()
 
     if config and config.project_id:
@@ -285,17 +286,96 @@ def show_profile_view():
             )
             # Enforce user data isolation: caller_uid must match uid
             activities = client.get_user_activity(uid=uid, caller_uid=uid)
-        except FirestorePermissionError:
-            fetch_error = "Access denied: Firestore security rules prevented loading history."
-        except FirestoreError as err:
-            fetch_error = f"Database notice: {err.message}"
+            cloud_synced = True
+        except (FirestorePermissionError, FirestoreError) as err:
+            # Check if token expired and can be refreshed
+            refreshed = False
+            refresh_tok = user.get("refresh_token")
+            if refresh_tok:
+                try:
+                    auth_client = FirebaseAuthClient(config)
+                    toks = auth_client.refresh_token(refresh_tok)
+                    if toks.get("id_token"):
+                        user["id_token"] = toks["id_token"]
+                        if toks.get("refresh_token"):
+                            user["refresh_token"] = toks["refresh_token"]
+                        st.session_state.auth_user = user
+                        client = FirestoreClient(
+                            project_id=config.project_id,
+                            id_token=toks["id_token"],
+                        )
+                        activities = client.get_user_activity(uid=uid, caller_uid=uid)
+                        cloud_synced = True
+                        refreshed = True
+                except Exception:
+                    pass
+
+            if not refreshed:
+                if isinstance(err, FirestorePermissionError):
+                    fetch_error = "Access denied: Firestore security rules prevented loading history."
+                else:
+                    fetch_error = f"Database notice: {err.message}"
         except Exception:
             fetch_error = "Could not connect to Cloud Firestore at this time."
     else:
         fetch_error = "Cloud Firestore project is not configured in `.streamlit/secrets.toml`."
 
+    # Fallback to local SQLite store if Firestore returned no activity or encountered a fetch error
+    is_local_fallback = False
+    if not activities and STORE:
+        try:
+            local_questions = STORE.get_recent_user_questions(limit=50)
+            if local_questions:
+                activities = [
+                    {
+                        "id": str(q.get("id", idx)),
+                        "question": q.get("question", ""),
+                        "category": categorize_prompt(q.get("question", "")),
+                        "conversation_id": q.get("conversation_id", ""),
+                        "timestamp": q.get("timestamp", ""),
+                    }
+                    for idx, q in enumerate(local_questions, 1)
+                ]
+                is_local_fallback = True
+        except Exception:
+            pass
+
     if fetch_error:
-        st.caption(f"ℹ️ {fetch_error}")
+        if is_local_fallback:
+            st.info(
+                "ℹ️ **Local History Active**: Displaying your questions from local storage. "
+                "Cloud sync is waiting for your Firestore security rules to be published in Firebase Console."
+            )
+        else:
+            st.caption(f"ℹ️ {fetch_error}")
+
+        proj_id = config.project_id if config and config.project_id else "it-helpdesk-agent-4e8c8"
+        with st.expander("🛠️ How to fix Firestore Security Rules in Firebase Console", expanded=not is_local_fallback):
+            st.markdown(
+                f"""
+                **Why does this happen?**  
+                By default, a new Firebase Firestore database starts in *locked mode* (`allow read, write: false;`), blocking client queries until you publish security rules.
+
+                **Steps to fix in under 1 minute:**
+                1. Open the [Firebase Console Rules](https://console.firebase.google.com/project/{proj_id}/firestore/rules).
+                2. If you haven't created a database yet, click **Create database** (choose **Native mode** and standard location).
+                3. In the **Rules** tab, replace the contents with:
+                ```javascript
+                rules_version = '2';
+                service cloud.firestore {{
+                  match /databases/{{database}}/documents {{
+                    match /users/{{userId}}/{{document=**}} {{
+                      allow read, write: if request.auth != null && request.auth.uid == userId;
+                    }}
+                    match /{{document=**}} {{
+                      allow read, write: false;
+                    }}
+                  }}
+                }}
+                ```
+                4. Click **Publish**. Then refresh this page!
+                """
+            )
 
     total_questions = len(activities)
     distinct_conversations = len(set(a["conversation_id"] for a in activities if a.get("conversation_id")))
@@ -1427,17 +1507,43 @@ if active_prompt:
         fb_config = FirebaseConfig.load()
         if fb_config and fb_config.project_id and st.session_state.auth_user:
             user_uid = st.session_state.auth_user.get("uid") or st.session_state.auth_user.get("localId")
+            cur_token = st.session_state.auth_user.get("id_token")
             fs_client = FirestoreClient(
                 project_id=fb_config.project_id,
-                id_token=st.session_state.auth_user.get("id_token"),
+                id_token=cur_token,
             )
-            fs_client.record_activity(
-                uid=user_uid,
-                question=active_prompt,
-                category=categorize_prompt(active_prompt),
-                conversation_id=conversation_id,
-                caller_uid=user_uid,
-            )
+            try:
+                fs_client.record_activity(
+                    uid=user_uid,
+                    question=active_prompt,
+                    category=categorize_prompt(active_prompt),
+                    conversation_id=conversation_id,
+                    caller_uid=user_uid,
+                )
+            except Exception:
+                # If recording failed (e.g. token expired), attempt token refresh once
+                refresh_tok = st.session_state.auth_user.get("refresh_token")
+                if refresh_tok:
+                    try:
+                        auth_c = FirebaseAuthClient(fb_config)
+                        toks = auth_c.refresh_token(refresh_tok)
+                        if toks.get("id_token"):
+                            st.session_state.auth_user["id_token"] = toks["id_token"]
+                            if toks.get("refresh_token"):
+                                st.session_state.auth_user["refresh_token"] = toks["refresh_token"]
+                            fs_client = FirestoreClient(
+                                project_id=fb_config.project_id,
+                                id_token=toks["id_token"],
+                            )
+                            fs_client.record_activity(
+                                uid=user_uid,
+                                question=active_prompt,
+                                category=categorize_prompt(active_prompt),
+                                conversation_id=conversation_id,
+                                caller_uid=user_uid,
+                            )
+                    except Exception:
+                        pass
     except Exception:
         # Analytics and Firestore activity recording must never interrupt the user chat
         pass
