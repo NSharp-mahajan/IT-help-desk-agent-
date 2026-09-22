@@ -218,7 +218,7 @@ def show_resolution_feedback():
     except Exception:
         st.caption("Feedback is temporarily unavailable. Your support chat is unaffected.")
         return
-    st.markdown("**Was your issue resolved?**")
+    st.markdown("**Resolution Confirmation** &mdash; *Was this guidance helpful in resolving your issue?*")
     if feedback is not None:
         confirmation = (
             "Thanks for confirming that your issue was resolved."
@@ -229,7 +229,7 @@ def show_resolution_feedback():
         return
 
     feedback_text = st.text_area(
-        "Optional feedback (optional)",
+        "Optional feedback",
         key=f"feedback-comment-{request_id}",
         max_chars=TelemetryStore.MAX_FEEDBACK_TEXT_LENGTH,
         placeholder="Add a short comment if you would like to share more context.",
@@ -238,10 +238,10 @@ def show_resolution_feedback():
     resolved_column, unresolved_column = st.columns(2)
     selected_status = None
     with resolved_column:
-        if st.button("Yes, resolved", key=f"feedback-resolved-{request_id}"):
+        if st.button("Mark as Resolved", key=f"feedback-resolved-{request_id}"):
             selected_status = "resolved"
     with unresolved_column:
-        if st.button("Still need help", key=f"feedback-unresolved-{request_id}"):
+        if st.button("Request Escalation", key=f"feedback-unresolved-{request_id}"):
             selected_status = "not_resolved"
 
     if selected_status is None:
@@ -335,9 +335,23 @@ def local_troubleshooting_response(prompt):
     return response, category
 
 
+USER_AVATAR = (
+    "data:image/svg+xml;utf8,"
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2394a3b8'>"
+    "<path d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/>"
+    "</svg>"
+)
+
+ASSISTANT_AVATAR = (
+    "data:image/svg+xml;utf8,"
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2310b981'>"
+    "<path d='M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5'/>"
+    "</svg>"
+)
+
+
 st.set_page_config(
-    page_title="IT Helpdesk",
-    page_icon="⚡",
+    page_title="IT Helpdesk | AI Diagnostics",
     layout="wide",
 )
 
@@ -347,43 +361,43 @@ is_dark = st.session_state.theme == "dark"
 
 if is_dark:
     colors = {
-        "bg": "#212121",
-        "surface": "#171717",
-        "surface2": "#2f2f2f",
-        "surface_card": "#262626",
-        "hover": "#333333",
+        "bg": "#0e1015",
+        "surface": "#161922",
+        "surface2": "#1e222e",
+        "surface_card": "#181c26",
+        "hover": "#252b3b",
         "border": "rgba(255, 255, 255, 0.08)",
-        "border2": "rgba(255, 255, 255, 0.15)",
-        "text": "#ececec",
-        "muted": "#b4b4b4",
-        "dim": "#71717a",
-        "accent": "#10a37f",
-        "accent_hover": "#0e8e6e",
-        "user_bubble": "#2f2f2f",
-        "shadow": "rgba(0, 0, 0, 0.35)",
+        "border2": "rgba(255, 255, 255, 0.16)",
+        "text": "#f3f4f6",
+        "muted": "#9ca3af",
+        "dim": "#6b7280",
+        "accent": "#10b981",
+        "accent_hover": "#059669",
+        "user_bubble": "#1e222e",
+        "shadow": "rgba(0, 0, 0, 0.45)",
     }
 else:
     colors = {
-        "bg": "#ffffff",
-        "surface": "#f9f9fb",
-        "surface2": "#f0f0f4",
+        "bg": "#f8fafc",
+        "surface": "#ffffff",
+        "surface2": "#f1f5f9",
         "surface_card": "#ffffff",
-        "hover": "#eaeaf0",
-        "border": "#e5e7eb",
-        "border2": "#d1d5db",
-        "text": "#111827",
-        "muted": "#4b5563",
-        "dim": "#9ca3af",
-        "accent": "#0d9488",
-        "accent_hover": "#0f766e",
-        "user_bubble": "#f3f4f6",
+        "hover": "#e2e8f0",
+        "border": "#e2e8f0",
+        "border2": "#cbd5e1",
+        "text": "#0f172a",
+        "muted": "#475569",
+        "dim": "#94a3b8",
+        "accent": "#059669",
+        "accent_hover": "#047857",
+        "user_bubble": "#f1f5f9",
         "shadow": "rgba(0, 0, 0, 0.06)",
     }
 
 st.markdown(
 f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {{
   --bg: {colors["bg"]};
@@ -423,10 +437,10 @@ html, body, .stApp, [class*="css"] {{
   position: fixed !important;
   top: 14px !important;
   left: 16px !important;
-  background-color: #262626 !important; /* Forces a dark button to highlight the white arrow */
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  background-color: var(--surface2) !important;
+  border: 1px solid var(--border2) !important;
   border-radius: 8px !important;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25) !important;
+  box-shadow: 0 4px 12px var(--shadow) !important;
   z-index: 9999 !important;
   padding: 6px !important;
   margin: 0 !important;
@@ -434,7 +448,7 @@ html, body, .stApp, [class*="css"] {{
 }}
 
 [data-testid="collapsedControl"]:hover {{
-  background-color: #404040 !important;
+  background-color: var(--hover) !important;
 }}
 
 [data-testid="collapsedControl"] svg {{
@@ -445,8 +459,8 @@ html, body, .stApp, [class*="css"] {{
 .top-header-main {{
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 16px 24px 16px 64px; /* Left padding ensures it clears the toggle arrow */
+  gap: 12px;
+  padding: 16px 24px 16px 64px;
   border-bottom: 1px solid var(--border);
   background-color: var(--bg);
   position: fixed;
@@ -456,7 +470,6 @@ html, body, .stApp, [class*="css"] {{
   z-index: 998;
   height: 64px;
 }}
-/* END HEADER CSS */
 
 #MainMenu, footer {{
   visibility: hidden !important;
@@ -477,21 +490,22 @@ html, body, .stApp, [class*="css"] {{
 .brand-wrapper {{
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   padding: 4px 8px 16px 8px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 14px;
 }}
 
 .brand-icon {{
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   background: var(--surface2);
+  border: 1px solid var(--border2);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 15px;
+  flex-shrink: 0;
 }}
 
 .brand-title {{
@@ -499,15 +513,24 @@ html, body, .stApp, [class*="css"] {{
   font-weight: 600;
   color: var(--text);
   letter-spacing: -0.01em;
+  line-height: 1.2;
+}}
+
+.brand-tag {{
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+  font-weight: 600;
 }}
 
 .sidebar-category {{
-  margin: 16px 8px 6px 8px;
-  font-size: 11px;
-  font-weight: 600;
+  margin: 18px 8px 6px 8px;
+  font-size: 10px;
+  font-weight: 700;
   color: var(--dim);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
 }}
 
 [data-testid="stSidebar"] .stButton {{
@@ -530,7 +553,7 @@ html, body, .stApp, [class*="css"] {{
   color: var(--muted) !important;
   font-size: 13px !important;
   font-weight: 500 !important;
-  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;
+  transition: all 0.15s ease !important;
 }}
 
 [data-testid="stSidebar"] .stButton > button div,
@@ -556,48 +579,60 @@ html, body, .stApp, [class*="css"] {{
   border: 1px solid var(--border2) !important;
   color: var(--text) !important;
   margin-bottom: 8px !important;
+  font-weight: 600 !important;
 }}
 
 [data-testid="stSidebar"] button[kind="primary"]:hover {{
   background-color: var(--hover) !important;
-  border-color: var(--border2) !important;
+  border-color: var(--accent) !important;
 }}
 
 .block-container {{
   max-width: 820px !important;
   margin: 0 auto !important;
-  padding: 100px 24px 130px 24px !important; /* Increased top padding to clear the fixed header */
+  padding: 100px 24px 130px 24px !important;
 }}
 
 .hero-box {{
   text-align: center;
-  padding: 48px 12px 28px;
+  padding: 44px 12px 28px;
 }}
 
 .hero-badge {{
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 5px 12px;
+  gap: 8px;
+  padding: 6px 14px;
   background: var(--surface2);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border2);
   border-radius: 999px;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--muted);
   margin-bottom: 16px;
 }}
 
-.status-dot {{
+.status-pulse {{
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background-color: var(--accent);
+  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  animation: pulse-indicator 2s infinite cubic-bezier(0.66, 0, 0, 1);
+  display: inline-block;
+}}
+
+@keyframes pulse-indicator {{
+  0% {{ box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }}
+  70% {{ box-shadow: 0 0 0 7px rgba(16, 185, 129, 0); }}
+  100% {{ box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }}
 }}
 
 .hero-title {{
   font-size: 28px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text);
   margin-bottom: 8px;
   letter-spacing: -0.02em;
@@ -606,9 +641,9 @@ html, body, .stApp, [class*="css"] {{
 .hero-desc {{
   font-size: 14px;
   color: var(--muted);
-  max-width: 460px;
+  max-width: 480px;
   margin: 0 auto;
-  line-height: 1.5;
+  line-height: 1.55;
 }}
 
 .main-view-header {{
@@ -629,7 +664,7 @@ html, body, .stApp, [class*="css"] {{
 .status-indicator {{
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 12px;
   color: var(--muted);
 }}
@@ -639,21 +674,22 @@ html, body, .stApp, [class*="css"] {{
   border: 1px solid var(--border) !important;
   color: var(--text) !important;
   border-radius: 12px !important;
-  padding: 16px !important;
-  min-height: 80px !important;
+  padding: 16px 20px !important;
+  min-height: 84px !important;
   display: flex !important;
   flex-direction: column !important;
   justify-content: center !important;
   align-items: flex-start !important;
   text-align: left !important;
-  transition: all 0.2s ease !important;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
   box-shadow: 0 2px 8px var(--shadow) !important;
 }}
 
 [data-testid="stMainBlockContainer"] .stButton > button:hover {{
-  background-color: var(--hover) !important;
-  border-color: var(--border2) !important;
-  transform: translateY(-1px) !important;
+  background-color: var(--surface2) !important;
+  border-color: var(--accent) !important;
+  transform: translateY(-2px) !important;
+  box-shadow: 0 8px 24px var(--shadow) !important;
 }}
 
 [data-testid="stMainBlockContainer"] .stButton > button p {{
@@ -661,6 +697,31 @@ html, body, .stApp, [class*="css"] {{
   white-space: pre-wrap !important;
   line-height: 1.5 !important;
   margin: 0 !important;
+}}
+
+.diagnostic-banner {{
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 8px;
+  font-size: 13px;
+  color: #fbbf24;
+  margin: 12px 0 16px 0;
+  line-height: 1.4;
+}}
+
+.diagnostic-badge {{
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  white-space: nowrap;
 }}
 
 [data-testid="stChatMessage"] {{
@@ -738,8 +799,14 @@ unsafe_allow_html=True,
 st.markdown(
     """
     <div class="top-header-main">
-        <div class="brand-icon">⚡</div>
-        <div class="brand-title">IT Helpdesk</div>
+        <div class="brand-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                <path d="M2 17l10 5 10-5"></path>
+                <path d="M2 12l10 5 10-5"></path>
+            </svg>
+        </div>
+        <div class="brand-title">IT Helpdesk Console</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -750,25 +817,34 @@ with st.sidebar:
     st.markdown(
         """
         <div class="brand-wrapper">
-          <div class="brand-icon">⚡</div>
-          <div class="brand-title">IT Helpdesk</div>
+          <div class="brand-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                <path d="M2 17l10 5 10-5"></path>
+                <path d="M2 12l10 5 10-5"></path>
+            </svg>
+          </div>
+          <div>
+            <div class="brand-title">IT Helpdesk</div>
+            <div class="brand-tag">AI Diagnostics</div>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    if st.button("＋  New chat", use_container_width=True, type="primary"):
+    if st.button("+  New conversation", use_container_width=True, type="primary"):
         start_new_conversation()
         st.rerun()
 
-    st.markdown('<div class="sidebar-category">Recents</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-category">Recent Sessions</div>', unsafe_allow_html=True)
 
     conversations = STORE.list_conversations()
 
     if conversations:
         for conversation in conversations[:10]:
             is_current = conversation["id"] == st.session_state.conversation_id
-            prefix = "●  " if is_current else "💬  "
+            prefix = "•  " if is_current else "   "
             title = prefix + conversation["title"]
             if len(title) > 30:
                 title = title[:28] + "..."
@@ -783,17 +859,17 @@ with st.sidebar:
     else:
         st.caption("No conversations yet.")
 
-    st.markdown('<div class="sidebar-category">Settings</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-category">Navigation</div>', unsafe_allow_html=True)
 
-    if st.button("🗂️  All chat history", use_container_width=True):
+    if st.button("Conversation archive", use_container_width=True):
         st.session_state.page = "history"
         st.rerun()
 
-    if st.button("📊  Support analytics", use_container_width=True):
+    if st.button("Support analytics", use_container_width=True):
         st.session_state.page = "analytics"
         st.rerun()
 
-    theme_toggle_label = "☀️  Light mode" if is_dark else "🌙  Dark mode"
+    theme_toggle_label = "Switch to light theme" if is_dark else "Switch to dark theme"
     if st.button(theme_toggle_label, use_container_width=True):
         st.session_state.theme = "light" if is_dark else "dark"
         st.rerun()
@@ -815,7 +891,7 @@ if st.session_state.page == "history":
     else:
         for conversation in conversations:
             if st.button(
-                f"💬  {conversation['title']}",
+                f"•  {conversation['title']}",
                 key=f"history-{conversation['id']}",
                 use_container_width=True,
             ):
@@ -836,11 +912,11 @@ if not st.session_state.messages:
         """
         <div class="hero-box">
           <div class="hero-badge">
-            <span class="status-dot"></span>
+            <span class="status-pulse"></span>
             <span>IT support ready</span>
           </div>
-          <div class="hero-title">Where can we help you today?</div>
-          <div class="hero-desc">Ask a diagnostic question, check network status, or initiate step-by-step troubleshooting.</div>
+          <div class="hero-title">IT Diagnostics Console</div>
+          <div class="hero-desc">Ask a diagnostic question, check network status, or initiate automated troubleshooting.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -849,26 +925,26 @@ if not st.session_state.messages:
     col1, col2 = st.columns(2)
     with col1:
         if st.button(
-            "📶  Wi-Fi Connected but No Internet\nDiagnose gateway & DNS configuration",
+            "NETWORK: Wi-Fi & Connectivity\nDiagnose gateway routing & DNS configuration",
             key="card_wifi",
             use_container_width=True,
         ):
             selected_quick_prompt = "My Wi-Fi is connected but the internet is not working."
         if st.button(
-            "🔑  Password Reset & MFA\nRecover account access or verify authenticator",
+            "ACCESS: Password Reset & MFA\nRecover account access or verify authenticator",
             key="card_pwd",
             use_container_width=True,
         ):
             selected_quick_prompt = "I need help resetting my work password and signing in."
     with col2:
         if st.button(
-            "🛡️  VPN Connection Troubles\nResolve timeout and authentication drops",
+            "VPN: Secure Tunnel Connection\nResolve timeout and authentication session drops",
             key="card_vpn",
             use_container_width=True,
         ):
             selected_quick_prompt = "My VPN is disconnecting and failing to authenticate."
         if st.button(
-            "⚡  Application Crash or Hang\nRemediate unresponsive workplace software",
+            "SOFTWARE: Workplace App Crash\nRemediate unresponsive workplace software",
             key="card_app",
             use_container_width=True,
         ):
@@ -879,7 +955,7 @@ else:
         <div class="main-view-header">
           <div class="view-heading">IT Diagnostics Console</div>
           <div class="status-indicator">
-            <span class="status-dot"></span>
+            <span class="status-pulse"></span>
             <span>IT support ready</span>
           </div>
         </div>
@@ -888,7 +964,7 @@ else:
     )
 
 for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
+    with st.chat_message(message["role"], avatar=USER_AVATAR if message["role"] == "user" else ASSISTANT_AVATAR):
         st.markdown(message["content"])
 
 show_resolution_feedback()
@@ -909,10 +985,10 @@ if active_prompt:
     )
     st.session_state.messages.append(user_message)
 
-    with st.chat_message("user"):
+    with st.chat_message("user", avatar=USER_AVATAR):
         st.markdown(active_prompt)
 
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
         requested_at = datetime.now(UTC).isoformat()
         request_started = perf_counter()
         outcome = "agent_success"
@@ -943,9 +1019,14 @@ if active_prompt:
             outcome = "fallback"
             error_stage = "foundry_agent_run"
             error_type = type(error).__name__
-            st.warning(
-                "Microsoft Foundry could not be reached. "
-                "Using local troubleshooting guidance."
+            st.markdown(
+                """
+                <div class="diagnostic-banner">
+                    <span class="diagnostic-badge">LOCAL DIAGNOSTIC MODE</span>
+                    <span>Microsoft Foundry unreachable &bull; First-line resolution guidance active</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
             answer, category = local_troubleshooting_response(active_prompt)
 
