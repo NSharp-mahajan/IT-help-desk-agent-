@@ -238,10 +238,10 @@ def show_resolution_feedback():
     resolved_column, unresolved_column = st.columns(2)
     selected_status = None
     with resolved_column:
-        if st.button("✅  Mark as Resolved", key=f"feedback-resolved-{request_id}"):
+        if st.button("Mark as Resolved", key=f"feedback-resolved-{request_id}"):
             selected_status = "resolved"
     with unresolved_column:
-        if st.button("🆘  Request Escalation", key=f"feedback-unresolved-{request_id}"):
+        if st.button("Request Escalation", key=f"feedback-unresolved-{request_id}"):
             selected_status = "not_resolved"
 
     if selected_status is None:
@@ -335,12 +335,23 @@ def local_troubleshooting_response(prompt):
     return response, category
 
 
-USER_AVATAR = "👤"
-ASSISTANT_AVATAR = "✨"
+USER_AVATAR = (
+    "data:image/svg+xml;utf8,"
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2394a3b8'>"
+    "<path d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/>"
+    "</svg>"
+)
+
+ASSISTANT_AVATAR = (
+    "data:image/svg+xml;utf8,"
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2310b981'>"
+    "<path d='M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5'/>"
+    "</svg>"
+)
+
 
 st.set_page_config(
     page_title="IT Helpdesk | AI Diagnostics",
-    page_icon="⚡",
     layout="wide",
 )
 
@@ -822,7 +833,7 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    if st.button("＋  New conversation", use_container_width=True, type="primary"):
+    if st.button("+  New conversation", use_container_width=True, type="primary"):
         start_new_conversation()
         st.rerun()
 
@@ -833,7 +844,7 @@ with st.sidebar:
     if conversations:
         for conversation in conversations[:10]:
             is_current = conversation["id"] == st.session_state.conversation_id
-            prefix = "●  " if is_current else "💬  "
+            prefix = "•  " if is_current else "   "
             title = prefix + conversation["title"]
             if len(title) > 30:
                 title = title[:28] + "..."
@@ -850,15 +861,15 @@ with st.sidebar:
 
     st.markdown('<div class="sidebar-category">Navigation</div>', unsafe_allow_html=True)
 
-    if st.button("🗂️  Conversation archive", use_container_width=True):
+    if st.button("Conversation archive", use_container_width=True):
         st.session_state.page = "history"
         st.rerun()
 
-    if st.button("📊  Support analytics", use_container_width=True):
+    if st.button("Support analytics", use_container_width=True):
         st.session_state.page = "analytics"
         st.rerun()
 
-    theme_toggle_label = "☀️  Switch to light theme" if is_dark else "🌙  Switch to dark theme"
+    theme_toggle_label = "Switch to light theme" if is_dark else "Switch to dark theme"
     if st.button(theme_toggle_label, use_container_width=True):
         st.session_state.theme = "light" if is_dark else "dark"
         st.rerun()
@@ -880,7 +891,7 @@ if st.session_state.page == "history":
     else:
         for conversation in conversations:
             if st.button(
-                f"💬  {conversation['title']}",
+                f"•  {conversation['title']}",
                 key=f"history-{conversation['id']}",
                 use_container_width=True,
             ):
@@ -904,7 +915,7 @@ if not st.session_state.messages:
             <span class="status-pulse"></span>
             <span>IT support ready</span>
           </div>
-          <div class="hero-title">Where can we help you today?</div>
+          <div class="hero-title">IT Diagnostics Console</div>
           <div class="hero-desc">Ask a diagnostic question, check network status, or initiate automated troubleshooting.</div>
         </div>
         """,
@@ -914,26 +925,26 @@ if not st.session_state.messages:
     col1, col2 = st.columns(2)
     with col1:
         if st.button(
-            "🌐  Wi-Fi & Network Diagnostics\nDiagnose gateway routing & DNS configuration",
+            "NETWORK: Wi-Fi & Connectivity\nDiagnose gateway routing & DNS configuration",
             key="card_wifi",
             use_container_width=True,
         ):
             selected_quick_prompt = "My Wi-Fi is connected but the internet is not working."
         if st.button(
-            "🔐  Password Reset & MFA Recovery\nRecover account access or verify authenticator",
+            "ACCESS: Password Reset & MFA\nRecover account access or verify authenticator",
             key="card_pwd",
             use_container_width=True,
         ):
             selected_quick_prompt = "I need help resetting my work password and signing in."
     with col2:
         if st.button(
-            "🛡️  VPN & Secure Tunnel Diagnostics\nResolve timeout and authentication session drops",
+            "VPN: Secure Tunnel Connection\nResolve timeout and authentication session drops",
             key="card_vpn",
             use_container_width=True,
         ):
             selected_quick_prompt = "My VPN is disconnecting and failing to authenticate."
         if st.button(
-            "💻  Workplace Application Crash\nRemediate unresponsive workplace software",
+            "SOFTWARE: Workplace App Crash\nRemediate unresponsive workplace software",
             key="card_app",
             use_container_width=True,
         ):
