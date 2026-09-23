@@ -5,7 +5,10 @@ from pathlib import Path
 from time import perf_counter
 
 import streamlit as st
-from agent_framework.foundry import FoundryAgent
+try:
+    from agent_framework.foundry import FoundryAgent
+except ImportError:
+    FoundryAgent = None
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 
@@ -39,6 +42,8 @@ MAX_CONTEXT_CHARS = 12000
 
 
 async def get_agent_response(prompt, session):
+    if FoundryAgent is None:
+        raise RuntimeError("The agent-framework-foundry package is not installed in this environment.")
     async with FoundryAgent(
         project_endpoint=PROJECT_ENDPOINT,
         agent_name=AGENT_NAME,
