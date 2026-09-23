@@ -9,7 +9,7 @@ try:
     from agent_framework.foundry import FoundryAgent
 except ImportError:
     FoundryAgent = None
-from azure.identity import DefaultAzureCredential
+from azure.identity import ClientSecretCredential
 from dotenv import load_dotenv
 
 from history_store import ConversationStore
@@ -30,9 +30,19 @@ from firestore_service import (
 
 load_dotenv()
 
-PROJECT_ENDPOINT = os.environ["FOUNDRY_PROJECT_ENDPOINT"]
+PROJECT_ENDPOINT = st.secrets["FOUNDRY_PROJECT_ENDPOINT"]
 AGENT_NAME = "IT-Helpdesk-Agent"
-AGENT_VERSION = os.getenv("FOUNDRY_AGENT_VERSION") or None
+AGENT_VERSION = st.secrets.get("FOUNDRY_AGENT_VERSION") or None
+
+AZURE_CLIENT_ID = st.secrets["AZURE_CLIENT_ID"]
+AZURE_TENANT_ID = st.secrets["AZURE_TENANT_ID"]
+AZURE_CLIENT_SECRET = st.secrets["AZURE_CLIENT_SECRET"]
+
+credential = ClientSecretCredential(
+    tenant_id=AZURE_TENANT_ID,
+    client_id=AZURE_CLIENT_ID,
+    client_secret=AZURE_CLIENT_SECRET,
+)
 
 STORE = ConversationStore(Path(__file__).with_name("chat_history.db"))
 TELEMETRY = TelemetryStore(Path(__file__).with_name("chat_history.db"))
@@ -48,7 +58,7 @@ async def get_agent_response(prompt, session):
         project_endpoint=PROJECT_ENDPOINT,
         agent_name=AGENT_NAME,
         agent_version=AGENT_VERSION,
-        credential=DefaultAzureCredential(),
+        credential=credential,
     ) as agent:
         if session is None:
             session = agent.create_session()
