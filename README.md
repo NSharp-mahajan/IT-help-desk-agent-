@@ -244,6 +244,16 @@ Run the full test suite (Foundry agent smoke tests, telemetry tests, Firebase au
 python -m unittest test_profile_dashboard.py test_firebase_auth.py test_app.py
 ```
 
+## Database & Data Storage
+
+The application uses two complementary storage layers:
+
+- **SQLite (`chat_history.db`)** is used for local application data, including conversation history, messages, request telemetry, user feedback, and ticket-related records. The Support Analytics dashboard reads structured data from this database to display support requests, conversations, resolution status, issue categories, usage trends, and system performance metrics.
+
+- **Cloud Firestore** is used for authenticated user-specific activity and cloud-synced profile information. User activity is stored under `/users/{uid}/helpdesk_activity` and protected using Firestore security rules, ensuring that an authenticated user can only access their own records.
+
+This separation allows the application to keep operational and analytics data in SQLite while using Firebase/Firestore for cloud-based user activity and data isolation.
+
 ## Security Notes
 
 - **Credentials Protection**: Never commit `.env`, `.streamlit/secrets.toml`, or service-account JSON files to version control. Both are ignored in `.gitignore`.
